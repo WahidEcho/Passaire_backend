@@ -229,32 +229,46 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     Green API POSTs here on every incoming message.
     Handles guest replies: 1 = confirm attendance, 2 = decline.
     Always returns 200 — errors are logged, never surfaced to Green API.
+
+    Green API actual payload structure (NO "body" wrapper):
+    {
+      "typeWebhook": "incomingMessageReceived",
+      "senderData": { "sender": "201234567890@c.us", ... },
+      "messageData": {
+        "typeMessage": "textMessage",
+        "textMessageData": { "textMessage": "1" }
+      }
+    }
     """
     try:
         payload = await request.json()
     except Exception:
         return {"status": "ok"}
 
-    # Green API webhook body structure
-    body     = payload.get("body", {})
-    msg_type = body.get("typeMessage")
+    logger.info("[WH] Received webhook: typeWebhook=%s", payload.get("typeWebhook"))
 
+    # Only process incoming text messages
+    if payload.get("typeWebhook") != "incomingMessageReceived":
+        return {"status": "ignored", "reason": "not an incoming message"}
+
+    msg_type = payload.get("messageData", {}).get("typeMessage")
     if msg_type != "textMessage":
         return {"status": "ignored", "reason": "not a text message"}
 
-    sender_data = body.get("senderData", {})
+    sender_data = payload.get("senderData", {})
     raw_phone   = sender_data.get("sender", "")    # e.g. "201039048775@c.us"
     phone       = raw_phone.replace("@c.us", "").replace("@g.us", "")
 
     text = (
-        body.get("messageData", {})
-            .get("textMessageData", {})
-            .get("textMessage", "")
-            .strip()
+        payload.get("messageData", {})
+               .get("textMessageData", {})
+               .get("textMessage", "")
+               .strip()
     )
 
+    logger.info("[WH] Message from %s: '%s'", phone, text)
+
     if text not in ("1", "2"):
-        # Send a helpful hint for unrecognised messages
         try:
             await greenapi.send_text(phone, INVALID_MSG)
         except Exception:
@@ -266,7 +280,7 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     # Find the most recent active guest record for this phone number
     guest_res = (
         sb.table("p_guests")
-        .select("*, events(*)")
+        .select("*, p_events(*)")
         .eq("phone", phone)
         .in_("status", ["invited", "confirmed"])
         .order("created_at", desc=True)
@@ -275,11 +289,13 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     )
 
     if not guest_res.data:
-        # Unknown number — ignore silently
+        logger.warning("[WH] No guest found for phone %s", phone)
         return {"status": "ok"}
 
     guest = guest_res.data[0]
-    event = guest.get("events") or {}
+    event = guest.get("p_events") or {}
+
+    logger.info("[WH] Matched guest: %s | event: %s", guest.get("name"), event.get("name"))
 
     background_tasks.add_task(
         _handle_confirmation,
