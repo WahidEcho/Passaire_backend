@@ -147,6 +147,107 @@ async def send_reminder(body: ReminderRequest, background_tasks: BackgroundTasks
     return {"message": f"Sending reminder to {len(guests)} confirmed guests", "count": len(guests)}
 
 
+# ── Custom Ticket Send ───────────────────────────────────────────────────────
+
+class CustomTicketRequest(BaseModel):
+    event_id:    str
+    phone:       str
+    message:     str           # Full custom message body ({name} replaced automatically)
+    agenda_url:  str | None = None   # Optional public URL of agenda image
+
+
+@router.post("/send-custom-ticket")
+async def send_custom_ticket(body: CustomTicketRequest, background_tasks: BackgroundTasks):
+    """
+    Generate a QR ticket for one guest and send:
+      1. Custom text message (with {name} personalised)
+      2. QR code image
+      3. Agenda image (if agenda_url provided)
+    The guest must already exist in p_guests for this event.
+    """
+    sb = get_supabase()
+
+    # Normalise phone
+    phone = body.phone.strip().replace(" ", "").replace("-", "").replace("+", "")
+    if phone.startswith("0"):
+        phone = "20" + phone[1:]
+
+    # Fetch guest
+    guest_res = (
+        sb.table("p_guests")
+        .select("*")
+        .eq("event_id", body.event_id)
+        .eq("phone", phone)
+        .single()
+        .execute()
+    )
+    if not guest_res.data:
+        raise HTTPException(404, "Guest not found for this event and phone number")
+    guest = guest_res.data
+
+    # Fetch event
+    event_res = sb.table("p_events").select("*").eq("id", body.event_id).single().execute()
+    if not event_res.data:
+        raise HTTPException(404, "Event not found")
+    event = event_res.data
+
+    # Generate QR ticket (overwrites existing file in storage)
+    try:
+        token, qr_url = create_ticket_qr(
+            guest_id=guest["id"],
+            event_id=event["id"],
+            guest_name=guest["name"],
+            event_name=event["name"],
+            zone=guest.get("zone"),
+        )
+    except Exception as e:
+        raise HTTPException(500, f"QR generation failed: {e}")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Upsert ticket record
+    sb.table("p_tickets").delete().eq("guest_id", guest["id"]).eq("event_id", event["id"]).execute()
+    sb.table("p_tickets").insert({
+        "guest_id":     guest["id"],
+        "event_id":     event["id"],
+        "token":        token,
+        "qr_image_url": qr_url,
+        "sent_at":      now_iso,
+    }).execute()
+    sb.table("p_guests").update({"status": "confirmed"}).eq("id", guest["id"]).execute()
+
+    personalised = body.message.replace("{name}", guest["name"])
+    agenda_url   = body.agenda_url
+
+    async def _send():
+        try:
+            # 1. Text message
+            await greenapi.send_text(phone, personalised)
+            # 2. QR ticket image
+            await greenapi.send_image(phone, qr_url, caption="")
+            # 3. Agenda image (if provided)
+            if agenda_url:
+                await greenapi.send_image(phone, agenda_url, caption="")
+            sb.table("p_wa_messages").insert({
+                "phone": phone, "message_type": "ticket", "status": "sent",
+            }).execute()
+            logger.info("[CUSTOM] Ticket sent to %s", phone)
+        except Exception as e:
+            logger.error("[CUSTOM] Send failed for %s: %s", phone, e)
+
+    background_tasks.add_task(_send)
+
+    result = {
+        "status":    "sending",
+        "guest":     guest["name"],
+        "phone":     phone,
+        "token":     token[:8].upper(),
+        "qr_url":    qr_url,
+        "messages":  ["text", "qr_image"] + (["agenda_image"] if agenda_url else []),
+    }
+    return result
+
+
 # ── Webhook Handler ──────────────────────────────────────────────────────────
 
 async def _handle_confirmation(guest: dict, event: dict, replied_yes: bool):
