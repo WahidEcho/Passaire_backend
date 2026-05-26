@@ -3,8 +3,11 @@
 -- Run this in Supabase SQL Editor
 -- ============================================================
 
+-- NOTE: Tables are prefixed with p_ to avoid conflicts with the existing
+-- platform schema (which already uses "events" and "tickets" table names).
+
 -- EVENTS
-create table if not exists events (
+create table if not exists p_events (
   id         uuid primary key default gen_random_uuid(),
   name       text not null,
   date       date not null,
@@ -14,9 +17,9 @@ create table if not exists events (
 );
 
 -- GUESTS
-create table if not exists guests (
+create table if not exists p_guests (
   id         uuid primary key default gen_random_uuid(),
-  event_id   uuid references events(id) on delete cascade,
+  event_id   uuid references p_events(id) on delete cascade,
   name       text not null,
   phone      text not null,            -- international format, NO +, e.g. 201039048775
   status     text default 'invited',   -- invited | confirmed | declined | checked_in
@@ -25,10 +28,10 @@ create table if not exists guests (
 );
 
 -- TICKETS
-create table if not exists tickets (
+create table if not exists p_tickets (
   id           uuid primary key default gen_random_uuid(),
-  guest_id     uuid references guests(id) on delete cascade,
-  event_id     uuid references events(id) on delete cascade,
+  guest_id     uuid references p_guests(id) on delete cascade,
+  event_id     uuid references p_events(id) on delete cascade,
   token        text unique not null,   -- UUID encoded in the QR image
   qr_image_url text,                   -- public URL from Supabase Storage bucket "tickets"
   sent_at      timestamptz,
@@ -36,16 +39,16 @@ create table if not exists tickets (
 );
 
 -- SCAN LOGS
-create table if not exists scan_logs (
+create table if not exists p_scan_logs (
   id          uuid primary key default gen_random_uuid(),
-  ticket_id   uuid references tickets(id) on delete cascade,
+  ticket_id   uuid references p_tickets(id) on delete cascade,
   gate_number int  default 1,
   action      text not null,           -- checked_in | checked_out
   scanned_at  timestamptz default now()
 );
 
 -- WHATSAPP MESSAGE LOG
-create table if not exists wa_messages (
+create table if not exists p_wa_messages (
   id           uuid primary key default gen_random_uuid(),
   phone        text not null,
   message_type text,                   -- invitation | ticket | reminder | agenda
@@ -62,8 +65,8 @@ create table if not exists wa_messages (
 -- DISABLE RLS (service_role key bypasses RLS, but disabling
 -- avoids confusion if you ever switch to anon key)
 -- ============================================================
-alter table events     disable row level security;
-alter table guests     disable row level security;
-alter table tickets    disable row level security;
-alter table scan_logs  disable row level security;
-alter table wa_messages disable row level security;
+alter table p_events      disable row level security;
+alter table p_guests      disable row level security;
+alter table p_tickets     disable row level security;
+alter table p_scan_logs   disable row level security;
+alter table p_wa_messages disable row level security;

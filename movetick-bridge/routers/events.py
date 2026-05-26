@@ -15,20 +15,20 @@ class CreateEventRequest(BaseModel):
 @router.post("/")
 async def create_event(body: CreateEventRequest):
     sb = get_supabase()
-    result = sb.table("events").insert(body.model_dump()).execute()
+    result = sb.table("p_events").insert(body.model_dump()).execute()
     return result.data[0]
 
 
 @router.get("/")
 async def list_events():
     sb = get_supabase()
-    return sb.table("events").select("*").order("date", desc=True).execute().data
+    return sb.table("p_events").select("*").order("date", desc=True).execute().data
 
 
 @router.get("/{event_id}")
 async def get_event(event_id: str):
     sb = get_supabase()
-    result = sb.table("events").select("*").eq("id", event_id).single().execute()
+    result = sb.table("p_events").select("*").eq("id", event_id).single().execute()
     if not result.data:
         raise HTTPException(404, "Event not found")
     return result.data

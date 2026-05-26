@@ -59,7 +59,7 @@ async def _send_invitation_to_guest(guest: dict, event: dict):
     try:
         await greenapi.send_text(guest["phone"], msg)
         sb = get_supabase()
-        sb.table("wa_messages").insert({
+        sb.table("p_wa_messages").insert({
             "phone": guest["phone"],
             "message_type": "invitation",
             "status": "sent",
@@ -76,13 +76,13 @@ async def send_invitations(body: BulkSendRequest, background_tasks: BackgroundTa
     """
     sb = get_supabase()
 
-    event_res = sb.table("events").select("*").eq("id", body.event_id).single().execute()
+    event_res = sb.table("p_events").select("*").eq("id", body.event_id).single().execute()
     if not event_res.data:
         raise HTTPException(404, "Event not found")
     event = event_res.data
 
     guests_res = (
-        sb.table("guests")
+        sb.table("p_guests")
         .select("*")
         .eq("event_id", body.event_id)
         .eq("status", "invited")
@@ -117,7 +117,7 @@ async def send_reminder(body: ReminderRequest, background_tasks: BackgroundTasks
     sb = get_supabase()
 
     guests_res = (
-        sb.table("guests")
+        sb.table("p_guests")
         .select("*")
         .eq("event_id", body.event_id)
         .eq("status", "confirmed")
@@ -133,7 +133,7 @@ async def send_reminder(body: ReminderRequest, background_tasks: BackgroundTasks
             personalised = body.message.replace("{name}", guest["name"])
             try:
                 await greenapi.send_text(guest["phone"], personalised)
-                sb.table("wa_messages").insert({
+                sb.table("p_wa_messages").insert({
                     "phone": guest["phone"],
                     "message_type": "reminder",
                     "status": "sent",
@@ -154,7 +154,7 @@ async def _handle_confirmation(guest: dict, event: dict, replied_yes: bool):
 
     if not replied_yes:
         # Guest declined
-        sb.table("guests").update({"status": "declined"}).eq("id", guest["id"]).execute()
+        sb.table("p_guests").update({"status": "declined"}).eq("id", guest["id"]).execute()
         await greenapi.send_text(
             guest["phone"],
             DECLINE_MSG.format(name=guest["name"])
@@ -163,7 +163,7 @@ async def _handle_confirmation(guest: dict, event: dict, replied_yes: bool):
 
     # Guest confirmed — check if ticket already exists
     existing = (
-        sb.table("tickets")
+        sb.table("p_tickets")
         .select("*")
         .eq("guest_id", guest["id"])
         .execute()
@@ -194,9 +194,9 @@ async def _handle_confirmation(guest: dict, event: dict, replied_yes: bool):
 
     now_iso = datetime.now(timezone.utc).isoformat()
 
-    sb.table("guests").update({"status": "confirmed"}).eq("id", guest["id"]).execute()
+    sb.table("p_guests").update({"status": "confirmed"}).eq("id", guest["id"]).execute()
 
-    sb.table("tickets").insert({
+    sb.table("p_tickets").insert({
         "guest_id":    guest["id"],
         "event_id":    event["id"],
         "token":       token,
@@ -204,7 +204,7 @@ async def _handle_confirmation(guest: dict, event: dict, replied_yes: bool):
         "sent_at":     now_iso,
     }).execute()
 
-    sb.table("wa_messages").insert({
+    sb.table("p_wa_messages").insert({
         "phone":        guest["phone"],
         "message_type": "ticket",
         "status":       "sent",
@@ -265,7 +265,7 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
 
     # Find the most recent active guest record for this phone number
     guest_res = (
-        sb.table("guests")
+        sb.table("p_guests")
         .select("*, events(*)")
         .eq("phone", phone)
         .in_("status", ["invited", "confirmed"])

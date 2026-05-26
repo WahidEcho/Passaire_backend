@@ -23,7 +23,7 @@ async def scan_ticket(body: ScanRequest):
     sb = get_supabase()
 
     ticket_res = (
-        sb.table("tickets")
+        sb.table("p_tickets")
         .select("*, guests(*), events(*)")
         .eq("token", body.token)
         .single()
@@ -42,8 +42,8 @@ async def scan_ticket(body: ScanRequest):
 
     if guest.get("status") == "checked_in":
         # Already inside — log as check-out
-        sb.table("guests").update({"status": "confirmed"}).eq("id", guest["id"]).execute()
-        sb.table("scan_logs").insert({
+        sb.table("p_guests").update({"status": "confirmed"}).eq("id", guest["id"]).execute()
+        sb.table("p_scan_logs").insert({
             "ticket_id":   ticket["id"],
             "gate_number": body.gate_number,
             "action":      "checked_out",
@@ -61,8 +61,8 @@ async def scan_ticket(body: ScanRequest):
         }
 
     # Check in
-    sb.table("guests").update({"status": "checked_in"}).eq("id", guest["id"]).execute()
-    sb.table("scan_logs").insert({
+    sb.table("p_guests").update({"status": "checked_in"}).eq("id", guest["id"]).execute()
+    sb.table("p_scan_logs").insert({
         "ticket_id":   ticket["id"],
         "gate_number": body.gate_number,
         "action":      "checked_in",
@@ -89,7 +89,7 @@ async def scan_logs(event_id: str, limit: int = 50):
     # Fetch ticket IDs for this event first (Supabase SDK can't filter
     # scan_logs by a foreign-table column in a single query)
     tickets_res = (
-        sb.table("tickets")
+        sb.table("p_tickets")
         .select("id")
         .eq("event_id", event_id)
         .execute()
@@ -99,7 +99,7 @@ async def scan_logs(event_id: str, limit: int = 50):
         return []
 
     logs = (
-        sb.table("scan_logs")
+        sb.table("p_scan_logs")
         .select("*, tickets(token, guests(name, phone))")
         .in_("ticket_id", ticket_ids)
         .order("scanned_at", desc=True)
@@ -113,7 +113,7 @@ async def scan_logs(event_id: str, limit: int = 50):
 async def live_stats(event_id: str):
     """Live dashboard stats for the event."""
     sb = get_supabase()
-    guests = sb.table("guests").select("status").eq("event_id", event_id).execute()
+    guests = sb.table("p_guests").select("status").eq("event_id", event_id).execute()
     counts: dict = {}
     for g in guests.data:
         s = g["status"]

@@ -57,7 +57,7 @@ async def upload_guests(
 
     sb = get_supabase()
     # Upsert — skip duplicates silently on (event_id, phone)
-    sb.table("guests").upsert(records, on_conflict="event_id,phone").execute()
+    sb.table("p_guests").upsert(records, on_conflict="event_id,phone").execute()
 
     return {"inserted": len(records)}
 
@@ -65,7 +65,7 @@ async def upload_guests(
 @router.get("/{event_id}")
 async def list_guests(event_id: str, status: str | None = None):
     sb = get_supabase()
-    query = sb.table("guests").select("*").eq("event_id", event_id)
+    query = sb.table("p_guests").select("*").eq("event_id", event_id)
     if status:
         query = query.eq("status", status)
     result = query.order("name").execute()
@@ -75,7 +75,7 @@ async def list_guests(event_id: str, status: str | None = None):
 @router.get("/{event_id}/stats")
 async def guest_stats(event_id: str):
     sb = get_supabase()
-    all_guests = sb.table("guests").select("status").eq("event_id", event_id).execute()
+    all_guests = sb.table("p_guests").select("status").eq("event_id", event_id).execute()
     counts: dict = {}
     for g in all_guests.data:
         s = g["status"]
