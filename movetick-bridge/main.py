@@ -157,9 +157,25 @@ async def admin_panel():
       <h2>📋 Upload Guest List</h2>
       <label>Event ID</label>
       <input id="ul-event-id" placeholder="Paste event UUID">
-      <label>CSV or Excel (columns: name, phone)</label>
+      <label>CSV / Excel — columns: name, phone, zone (zone optional)</label>
       <input id="ul-file" type="file" accept=".csv,.xlsx,.xls">
-      <button onclick="uploadGuests()">Upload Guests</button>
+
+      <label style="margin-top:14px">Send Mode</label>
+      <div style="display:flex;gap:0;border:1px solid #333;border-radius:8px;overflow:hidden;margin-bottom:4px;">
+        <button id="mode-rsvp" onclick="setMode('rsvp')"
+          style="flex:1;margin:0;border-radius:0;background:#5B3BE8;border-right:1px solid #333">
+          💬 RSVP First
+        </button>
+        <button id="mode-direct" onclick="setMode('direct')"
+          style="flex:1;margin:0;border-radius:0;background:#1a1a2e">
+          ⚡ Direct QR
+        </button>
+      </div>
+      <p id="mode-desc" style="font-size:12px;color:#888;margin-bottom:10px">
+        Guests receive invitation → reply 1 to get QR ticket
+      </p>
+
+      <button onclick="uploadGuests()">Upload &amp; Send</button>
       <div class="result" id="ul-result"></div>
     </div>
 
@@ -249,6 +265,17 @@ async function createEvent() {
   show("ev-result", data, !ok);
 }
 
+// ── send mode toggle ──────────────────────────────────────────────────────────
+let _sendMode = "rsvp";
+function setMode(m) {
+  _sendMode = m;
+  document.getElementById("mode-rsvp").style.background   = m === "rsvp"   ? "#5B3BE8" : "#1a1a2e";
+  document.getElementById("mode-direct").style.background = m === "direct" ? "#5B3BE8" : "#1a1a2e";
+  document.getElementById("mode-desc").textContent = m === "rsvp"
+    ? "Guests receive invitation → reply 1 to get QR ticket"
+    : "⚡ QR ticket generated & sent instantly — no reply needed";
+}
+
 // ── guests ───────────────────────────────────────────────────────────────────
 async function uploadGuests() {
   const eventId = document.getElementById("ul-event-id").value.trim();
@@ -256,6 +283,7 @@ async function uploadGuests() {
   if (!file || !eventId) return show("ul-result", "Fill in event ID and choose a file", true);
   const fd = new FormData();
   fd.append("event_id", eventId);
+  fd.append("send_mode", _sendMode);
   fd.append("file", file);
   const { ok, data } = await call("/guests/upload", { method: "POST", body: fd });
   show("ul-result", data, !ok);
