@@ -1,7 +1,9 @@
 import logging
+import traceback
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from services.supabase_client import get_supabase
+from services.qr_generator import create_ticket_qr
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/scanner", tags=["scanner"])
@@ -120,3 +122,24 @@ async def live_stats(event_id: str):
         "declined":         counts.get("declined", 0),
         "breakdown":        counts,
     }
+
+
+@router.get("/debug/qr-test/{event_id}/{guest_id}")
+async def debug_qr_test(event_id: str, guest_id: str):
+    """Temporary debug: run QR generation synchronously and return error detail."""
+    sb = get_supabase()
+    guest_res = sb.table("p_guests").select("*").eq("id", guest_id).single().execute()
+    if not guest_res.data:
+        return {"error": "guest not found"}
+    guest = guest_res.data
+    try:
+        token, qr_url = create_ticket_qr(
+            guest_id=guest["id"],
+            event_id=event_id,
+            guest_name=guest["name"],
+            event_name="Move Beyond Night",
+            zone=guest.get("zone"),
+        )
+        return {"ok": True, "token": token[:8], "qr_url": qr_url}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "traceback": traceback.format_exc()}
