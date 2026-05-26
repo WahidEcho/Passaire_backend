@@ -50,13 +50,13 @@ async def _generate_and_send(guest: dict, event: dict):
 
     now_iso = datetime.now(timezone.utc).isoformat()
 
-    sb.table("p_tickets").upsert({
+    sb.table("p_tickets").insert({
         "guest_id":     guest["id"],
         "event_id":     event["id"],
         "token":        token,
         "qr_image_url": qr_url,
         "sent_at":      now_iso,
-    }, on_conflict="guest_id").execute()
+    }).execute()
 
     sb.table("p_guests").update({"status": "confirmed"}).eq("id", guest["id"]).execute()
 
