@@ -6,13 +6,18 @@ from services.supabase_client import get_supabase
 
 # ── Zone colours ──────────────────────────────────────────────────────────────
 ZONE_COLOURS = {
-    "blue":  {"bg": "#1D4ED8", "text": "#FFFFFF"},
-    "red":   {"bg": "#B91C1C", "text": "#FFFFFF"},
-    "green": {"bg": "#15803D", "text": "#FFFFFF"},
-    "white": {"bg": "#F0F0F0", "text": "#1A1A1A"},
-    "gold":  {"bg": "#B8962E", "text": "#FFFFFF"},
-    "black": {"bg": "#1A1A1A", "text": "#FFFFFF"},
-    "vip":   {"bg": "#7C3AED", "text": "#FFFFFF"},
+    "blue":         {"bg": "#1D4ED8", "text": "#FFFFFF"},
+    "red":          {"bg": "#B91C1C", "text": "#FFFFFF"},
+    "green":        {"bg": "#15803D", "text": "#FFFFFF"},
+    "white":        {"bg": "#F0F0F0", "text": "#1A1A1A"},
+    "gold":         {"bg": "#B8962E", "text": "#FFFFFF"},
+    "black":        {"bg": "#1A1A1A", "text": "#FFFFFF"},
+    "vip":          {"bg": "#7C3AED", "text": "#FFFFFF"},
+    "light purple": {"bg": "#7C3AED", "text": "#FFFFFF"},
+    "purple":       {"bg": "#7C3AED", "text": "#FFFFFF"},
+    "grey":         {"bg": "#4B5563", "text": "#FFFFFF"},
+    "gray":         {"bg": "#4B5563", "text": "#FFFFFF"},
+    "silver":       {"bg": "#6B7280", "text": "#FFFFFF"},
 }
 DEFAULT_ZONE = {"bg": "#4B5563", "text": "#F9FAFB"}
 
