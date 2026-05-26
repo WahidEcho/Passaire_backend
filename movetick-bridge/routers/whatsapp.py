@@ -187,6 +187,7 @@ async def _handle_confirmation(guest: dict, event: dict, replied_yes: bool):
             event_id=event["id"],
             guest_name=guest["name"],
             event_name=event["name"],
+            zone=guest.get("zone"),
         )
     except Exception as exc:
         logger.error("[QR] Failed to generate ticket for guest %s: %s", guest["id"], exc)

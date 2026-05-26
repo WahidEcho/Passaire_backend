@@ -17,31 +17,27 @@ async def scan_ticket(body: ScanRequest):
     """
     Gate scanner endpoint.
     - First scan  → checked_in
-    - Second scan → checked_out  (toggle)
+    - Second scan → checked_out (toggle)
     Returns guest info on valid scan, 404 on invalid token.
     """
     sb = get_supabase()
 
     ticket_res = (
         sb.table("p_tickets")
-        .select("*, guests(*), events(*)")
+        .select("*, p_guests(*), p_events(*)")
         .eq("token", body.token)
         .single()
         .execute()
     )
 
     if not ticket_res.data:
-        raise HTTPException(404, detail={
-            "valid": False,
-            "reason": "Ticket not found",
-        })
+        raise HTTPException(404, detail={"valid": False, "reason": "Ticket not found"})
 
     ticket = ticket_res.data
-    guest  = ticket.get("guests") or {}
-    event  = ticket.get("events") or {}
+    guest  = ticket.get("p_guests") or {}
+    event  = ticket.get("p_events") or {}
 
     if guest.get("status") == "checked_in":
-        # Already inside — log as check-out
         sb.table("p_guests").update({"status": "confirmed"}).eq("id", guest["id"]).execute()
         sb.table("p_scan_logs").insert({
             "ticket_id":   ticket["id"],
@@ -51,16 +47,16 @@ async def scan_ticket(body: ScanRequest):
         return {
             "valid":   True,
             "action":  "checked_out",
-            "guest":   {
+            "guest": {
                 "name":      guest["name"],
                 "phone":     guest["phone"],
+                "zone":      guest.get("zone"),
                 "ticket_id": ticket["id"][:8].upper(),
             },
             "event":   event.get("name"),
             "message": f"Checked OUT: {guest['name']}",
         }
 
-    # Check in
     sb.table("p_guests").update({"status": "checked_in"}).eq("id", guest["id"]).execute()
     sb.table("p_scan_logs").insert({
         "ticket_id":   ticket["id"],
@@ -71,9 +67,10 @@ async def scan_ticket(body: ScanRequest):
     return {
         "valid":   True,
         "action":  "checked_in",
-        "guest":   {
+        "guest": {
             "name":      guest["name"],
             "phone":     guest["phone"],
+            "zone":      guest.get("zone"),
             "ticket_id": ticket["id"][:8].upper(),
         },
         "event":   event.get("name"),
@@ -86,8 +83,6 @@ async def scan_logs(event_id: str, limit: int = 50):
     """Return recent scan logs for an event."""
     sb = get_supabase()
 
-    # Fetch ticket IDs for this event first (Supabase SDK can't filter
-    # scan_logs by a foreign-table column in a single query)
     tickets_res = (
         sb.table("p_tickets")
         .select("id")
@@ -100,7 +95,7 @@ async def scan_logs(event_id: str, limit: int = 50):
 
     logs = (
         sb.table("p_scan_logs")
-        .select("*, tickets(token, guests(name, phone))")
+        .select("*, p_tickets(token, p_guests(name, phone, zone))")
         .in_("ticket_id", ticket_ids)
         .order("scanned_at", desc=True)
         .limit(limit)
@@ -111,7 +106,7 @@ async def scan_logs(event_id: str, limit: int = 50):
 
 @router.get("/live/{event_id}")
 async def live_stats(event_id: str):
-    """Live dashboard stats for the event."""
+    """Live dashboard stats for an event."""
     sb = get_supabase()
     guests = sb.table("p_guests").select("status").eq("event_id", event_id).execute()
     counts: dict = {}
@@ -119,9 +114,9 @@ async def live_stats(event_id: str):
         s = g["status"]
         counts[s] = counts.get(s, 0) + 1
     return {
-        "total_confirmed":   counts.get("confirmed", 0) + counts.get("checked_in", 0),
-        "currently_inside":  counts.get("checked_in", 0),
-        "total_invited":     counts.get("invited", 0),
-        "declined":          counts.get("declined", 0),
-        "breakdown":         counts,
+        "total_confirmed":  counts.get("confirmed", 0) + counts.get("checked_in", 0),
+        "currently_inside": counts.get("checked_in", 0),
+        "total_invited":    counts.get("invited", 0),
+        "declined":         counts.get("declined", 0),
+        "breakdown":        counts,
     }

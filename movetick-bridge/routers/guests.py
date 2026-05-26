@@ -43,13 +43,23 @@ async def upload_guests(
     phone_col = next((c for c in df.columns if "phone" in c or "mobile" in c or "number" in c), None)
 
     if not name_col or not phone_col:
-        raise HTTPException(400, "File must have columns: name, phone")
+        raise HTTPException(400, "File must have columns: name, phone (zone is optional)")
 
-    df = df[[name_col, phone_col]].dropna()
-    df.columns = ["name", "phone"]
+    zone_col = next((c for c in df.columns if "zone" in c), None)
+
+    cols = [name_col, phone_col] + ([zone_col] if zone_col else [])
+    df = df[cols].dropna(subset=[name_col, phone_col])
+
+    rename = {"name": "name", "phone": "phone"}
+    if zone_col:
+        rename[zone_col] = "zone"
+    df = df.rename(columns={name_col: "name", phone_col: "phone", **(({zone_col: "zone"}) if zone_col else {})})
+
     df["phone"]    = df["phone"].apply(_normalise_phone)
     df["event_id"] = event_id
     df["status"]   = "invited"
+    if "zone" not in df.columns:
+        df["zone"] = None
 
     records = df.to_dict(orient="records")
     if not records:
