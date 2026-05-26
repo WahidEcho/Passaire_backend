@@ -126,12 +126,14 @@ async def live_stats(event_id: str):
 
 @router.get("/debug/qr-test/{event_id}/{guest_id}")
 async def debug_qr_test(event_id: str, guest_id: str):
-    """Temporary debug: run QR generation synchronously and return error detail."""
+    """Temporary debug: run full ticket flow synchronously and return error detail."""
+    from datetime import datetime, timezone
     sb = get_supabase()
     guest_res = sb.table("p_guests").select("*").eq("id", guest_id).single().execute()
     if not guest_res.data:
         return {"error": "guest not found"}
     guest = guest_res.data
+    steps = {}
     try:
         token, qr_url = create_ticket_qr(
             guest_id=guest["id"],
@@ -140,6 +142,39 @@ async def debug_qr_test(event_id: str, guest_id: str):
             event_name="Move Beyond Night",
             zone=guest.get("zone"),
         )
-        return {"ok": True, "token": token[:8], "qr_url": qr_url}
+        steps["qr_ok"] = True
     except Exception as e:
-        return {"ok": False, "error": str(e), "traceback": traceback.format_exc()}
+        steps["qr_ok"] = False
+        steps["qr_error"] = str(e)
+        steps["qr_trace"] = traceback.format_exc()
+        return steps
+
+    try:
+        # delete any existing ticket first to avoid unique constraint
+        sb.table("p_tickets").delete().eq("guest_id", guest_id).eq("event_id", event_id).execute()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        ins = sb.table("p_tickets").insert({
+            "guest_id":     guest["id"],
+            "event_id":     event_id,
+            "token":        token,
+            "qr_image_url": qr_url,
+            "sent_at":      now_iso,
+        }).execute()
+        steps["insert_ok"] = True
+        steps["insert_data"] = ins.data
+    except Exception as e:
+        steps["insert_ok"] = False
+        steps["insert_error"] = str(e)
+        steps["insert_trace"] = traceback.format_exc()
+        return steps
+
+    try:
+        upd = sb.table("p_guests").update({"status": "confirmed"}).eq("id", guest_id).execute()
+        steps["status_ok"] = True
+    except Exception as e:
+        steps["status_ok"] = False
+        steps["status_error"] = str(e)
+
+    steps["token"] = token[:8]
+    steps["qr_url"] = qr_url
+    return steps
