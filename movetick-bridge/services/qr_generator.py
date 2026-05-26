@@ -198,4 +198,6 @@ def create_ticket_qr(guest_id: str, event_id: str,
         path=file_path, file=png_bytes,
         file_options={"content-type": "image/png", "upsert": "true"},
     )
-    return token, sb.storage.from_("tickets").get_public_url(file_path)
+    url = sb.storage.from_("tickets").get_public_url(file_path)
+    # Strip trailing '?' that Supabase SDK sometimes appends — breaks sendFileByUrl
+    return token, url.rstrip("?")
