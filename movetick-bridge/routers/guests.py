@@ -8,8 +8,8 @@ from io import BytesIO
 import pandas as pd
 import httpx
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
+import zxingcpp
 from PIL import Image
-from pyzbar.pyzbar import decode as qr_decode
 
 from services.supabase_client import get_supabase
 from services.qr_generator import create_ticket_qr
@@ -292,11 +292,11 @@ async def recover_tickets_from_storage(event_id: str):
                 failed.append({"guest_id": guest_id, "reason": f"Storage {resp.status_code}"})
                 continue
             img = Image.open(BytesIO(resp.content))
-            decoded = qr_decode(img)
+            decoded = zxingcpp.read_barcodes(img)
             if not decoded:
                 failed.append({"guest_id": guest_id, "reason": "QR decode failed"})
                 continue
-            token = decoded[0].data.decode("utf-8").strip()
+            token = decoded[0].text.strip()
             sb.table("p_tickets").upsert(
                 {
                     "guest_id": guest_id,
