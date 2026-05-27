@@ -52,7 +52,7 @@ async def scan_ticket(body: ScanRequest):
         sb.table("p_tickets")
         .select("*, p_guests(*), p_events(*)")
         .eq("token", body.token)
-        .single()
+        .maybe_single()
         .execute()
     )
 
@@ -118,7 +118,7 @@ async def preview_ticket(token: str):
         sb.table("p_tickets")
         .select("*, p_guests(*)")
         .eq("token", token)
-        .single()
+        .maybe_single()
         .execute()
     )
 

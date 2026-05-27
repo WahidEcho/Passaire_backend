@@ -1,10 +1,15 @@
 import io
+import os
 import asyncio
 import logging
 from datetime import datetime, timezone
+from io import BytesIO
 
 import pandas as pd
+import requests as _requests
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
+from PIL import Image
+from pyzbar.pyzbar import decode as qr_decode
 
 from services.supabase_client import get_supabase
 from services.qr_generator import create_ticket_qr
@@ -255,6 +260,61 @@ async def guest_history(guest_id: str):
         {"action": log["action"], "timestamp": log["scanned_at"]}
         for log in (logs_res.data or [])
     ]
+
+
+# ── Recover tickets from Storage ───────────────────────────────────────────────
+
+@router.post("/{event_id}/recover-tickets")
+async def recover_tickets_from_storage(event_id: str):
+    """
+    Reads every guest's existing QR PNG from Supabase Storage,
+    decodes the embedded token, and inserts/upserts the row into p_tickets.
+    Does NOT generate new images and does NOT send any WhatsApp messages.
+    Safe to call multiple times (upsert on event_id+guest_id).
+    """
+    sb = get_supabase()
+    event_res = sb.table("p_events").select("id").eq("id", event_id).maybe_single().execute()
+    if not event_res.data:
+        raise HTTPException(404, "Event not found")
+    guests_res = sb.table("p_guests").select("id, name").eq("event_id", event_id).execute()
+    guests = guests_res.data or []
+    supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
+    storage_base = f"{supabase_url}/storage/v1/object/public/tickets"
+    recovered = []
+    failed = []
+    for guest in guests:
+        guest_id = guest["id"]
+        file_path = f"{event_id}/{guest_id}.png"
+        image_url = f"{storage_base}/{file_path}"
+        try:
+            resp = _requests.get(image_url, timeout=10)
+            if resp.status_code != 200:
+                failed.append({"guest_id": guest_id, "reason": f"Storage {resp.status_code}"})
+                continue
+            img = Image.open(BytesIO(resp.content))
+            decoded = qr_decode(img)
+            if not decoded:
+                failed.append({"guest_id": guest_id, "reason": "QR decode failed"})
+                continue
+            token = decoded[0].data.decode("utf-8").strip()
+            sb.table("p_tickets").upsert(
+                {
+                    "guest_id": guest_id,
+                    "event_id": event_id,
+                    "token": token,
+                    "qr_image_url": image_url,
+                    "sent_at": datetime.now(timezone.utc).isoformat(),
+                },
+                on_conflict="event_id,guest_id",
+            ).execute()
+            recovered.append(guest_id)
+        except Exception as e:
+            failed.append({"guest_id": guest_id, "reason": str(e)})
+    return {
+        "recovered": len(recovered),
+        "failed": len(failed),
+        "failures": failed,
+    }
 
 
 # ── Manual check-in / check-out ────────────────────────────────────────────────
