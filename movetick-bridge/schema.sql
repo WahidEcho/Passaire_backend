@@ -4,12 +4,15 @@
 
 -- 1. EVENTS
 create table p_events (
-  id         uuid primary key default gen_random_uuid(),
-  name       text not null,
-  date       date not null,
-  venue      text,
-  gate_count int  default 1,
-  created_at timestamptz default now()
+  id               uuid primary key default gen_random_uuid(),
+  name             text not null,
+  date             date not null,
+  venue            text,
+  gate_count       int  default 1,
+  slug             text unique,           -- human-readable id e.g. "moharram-partners"
+  manager_passcode text,                  -- e.g. "admin#991001"
+  guard_passcode   text,                  -- e.g. "guard#2024"
+  created_at       timestamptz default now()
 );
 
 -- 2. GUESTS
@@ -39,7 +42,8 @@ create table p_tickets (
 -- 4. SCAN LOGS
 create table p_scan_logs (
   id          uuid primary key default gen_random_uuid(),
-  ticket_id   uuid references p_tickets(id) on delete cascade,
+  ticket_id   uuid references p_tickets(id) on delete cascade,  -- nullable for manual ops
+  guest_id    uuid references p_guests(id) on delete cascade,   -- denormalised for fast lookup
   gate_number int  default 1,
   action      text not null,          -- checked_in | checked_out
   scanned_at  timestamptz default now()
@@ -64,6 +68,14 @@ alter table p_guests      disable row level security;
 alter table p_tickets     disable row level security;
 alter table p_scan_logs   disable row level security;
 alter table p_wa_messages disable row level security;
+
+-- ============================================================
+-- MIGRATIONS  (run these if upgrading an existing database)
+-- ============================================================
+-- alter table p_events      add column if not exists slug             text unique;
+-- alter table p_events      add column if not exists manager_passcode text;
+-- alter table p_events      add column if not exists guard_passcode   text;
+-- alter table p_scan_logs   add column if not exists guest_id         uuid references p_guests(id) on delete cascade;
 
 -- ============================================================
 -- STORAGE BUCKET  (do this in the Supabase Dashboard)

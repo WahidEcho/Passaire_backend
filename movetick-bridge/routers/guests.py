@@ -33,6 +33,18 @@ def _normalise_phone(raw: str) -> str:
     return phone
 
 
+def _attach_qr_url(guest: dict) -> dict:
+    """Flatten the nested p_tickets list to a top-level qr_url field."""
+    tickets = guest.pop("p_tickets", None) or []
+    if isinstance(tickets, list) and tickets:
+        guest["qr_url"] = tickets[0].get("qr_image_url")
+    elif isinstance(tickets, dict):
+        guest["qr_url"] = tickets.get("qr_image_url")
+    else:
+        guest["qr_url"] = None
+    return guest
+
+
 async def _generate_and_send(guest: dict, event: dict):
     """Generate QR ticket and send directly via WhatsApp (no RSVP)."""
     sb = get_supabase()
@@ -78,6 +90,8 @@ async def _generate_and_send(guest: dict, event: dict):
     except Exception as e:
         logger.error("[DIRECT] WhatsApp send failed for %s: %s", guest["phone"], e)
 
+
+# ── Upload ─────────────────────────────────────────────────────────────────────
 
 @router.post("/upload")
 async def upload_guests(
@@ -134,7 +148,6 @@ async def upload_guests(
             raise HTTPException(404, "Event not found")
         event = event_res.data
 
-        # Fetch freshly inserted guests to get their DB ids
         phones = [r["phone"] for r in records]
         guests_res = (
             sb.table("p_guests")
@@ -157,13 +170,47 @@ async def upload_guests(
     return {"inserted": len(records), "mode": "rsvp"}
 
 
+# ── Detail by guest ID (must be defined before /{event_id} catch-all) ─────────
+
+@router.get("/detail/{guest_id}")
+async def get_guest_detail(guest_id: str):
+    """Return a single guest by their own ID (not event ID)."""
+    sb = get_supabase()
+    res = (
+        sb.table("p_guests")
+        .select("*, p_tickets(qr_image_url)")
+        .eq("id", guest_id)
+        .single()
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(404, "Guest not found")
+    guest = res.data
+    tickets = guest.pop("p_tickets", None) or []
+    if isinstance(tickets, list) and tickets:
+        guest["qr_url"] = tickets[0].get("qr_image_url")
+    elif isinstance(tickets, dict):
+        guest["qr_url"] = tickets.get("qr_image_url")
+    else:
+        guest["qr_url"] = None
+    return guest
+
+
+# ── List guests for an event ───────────────────────────────────────────────────
+
 @router.get("/{event_id}")
 async def list_guests(event_id: str, status: str | None = None):
+    """List all guests for an event, including zone and qr_url."""
     sb = get_supabase()
-    query = sb.table("p_guests").select("*").eq("event_id", event_id)
+    query = (
+        sb.table("p_guests")
+        .select("*, p_tickets(qr_image_url)")
+        .eq("event_id", event_id)
+    )
     if status:
         query = query.eq("status", status)
-    return query.order("name").execute().data
+    data = query.order("name").execute().data or []
+    return [_attach_qr_url(g) for g in data]
 
 
 @router.get("/{event_id}/stats")
@@ -175,3 +222,99 @@ async def guest_stats(event_id: str):
         s = g["status"]
         counts[s] = counts.get(s, 0) + 1
     return {"total": len(data), "breakdown": counts}
+
+
+# ── Guest scan history ─────────────────────────────────────────────────────────
+
+@router.get("/{guest_id}/history")
+async def guest_history(guest_id: str):
+    """Return all scan events for a specific guest, ordered ascending."""
+    sb = get_supabase()
+
+    # Gather the guest's ticket IDs
+    tickets_res = (
+        sb.table("p_tickets")
+        .select("id")
+        .eq("guest_id", guest_id)
+        .execute()
+    )
+    ticket_ids = [t["id"] for t in (tickets_res.data or [])]
+
+    if not ticket_ids:
+        return []
+
+    logs_res = (
+        sb.table("p_scan_logs")
+        .select("action, scanned_at")
+        .in_("ticket_id", ticket_ids)
+        .order("scanned_at", desc=False)
+        .execute()
+    )
+
+    return [
+        {"action": log["action"], "timestamp": log["scanned_at"]}
+        for log in (logs_res.data or [])
+    ]
+
+
+# ── Manual check-in / check-out ────────────────────────────────────────────────
+
+@router.post("/{guest_id}/manual-checkin")
+async def manual_checkin(guest_id: str):
+    """Manually set a guest's status to checked_in and record a scan log."""
+    sb = get_supabase()
+
+    guest_res = sb.table("p_guests").select("id").eq("id", guest_id).single().execute()
+    if not guest_res.data:
+        raise HTTPException(404, "Guest not found")
+
+    sb.table("p_guests").update({"status": "checked_in"}).eq("id", guest_id).execute()
+
+    # Get ticket id if available (nullable in scan_logs schema)
+    ticket_res = (
+        sb.table("p_tickets")
+        .select("id")
+        .eq("guest_id", guest_id)
+        .limit(1)
+        .execute()
+    )
+    ticket_id = ticket_res.data[0]["id"] if ticket_res.data else None
+
+    sb.table("p_scan_logs").insert({
+        "ticket_id":   ticket_id,
+        "guest_id":    guest_id,
+        "gate_number": 0,
+        "action":      "checked_in",
+    }).execute()
+
+    return {"success": True}
+
+
+@router.post("/{guest_id}/manual-checkout")
+async def manual_checkout(guest_id: str):
+    """Manually revert a guest's status to confirmed and record a scan log."""
+    sb = get_supabase()
+
+    guest_res = sb.table("p_guests").select("id").eq("id", guest_id).single().execute()
+    if not guest_res.data:
+        raise HTTPException(404, "Guest not found")
+
+    sb.table("p_guests").update({"status": "confirmed"}).eq("id", guest_id).execute()
+
+    ticket_res = (
+        sb.table("p_tickets")
+        .select("id")
+        .eq("guest_id", guest_id)
+        .limit(1)
+        .execute()
+    )
+    ticket_id = ticket_res.data[0]["id"] if ticket_res.data else None
+
+    sb.table("p_scan_logs").insert({
+        "ticket_id":   ticket_id,
+        "guest_id":    guest_id,
+        "gate_number": 0,
+        "action":      "checked_out",
+    }).execute()
+
+    return {"success": True}
