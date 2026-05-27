@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from io import BytesIO
 
 import pandas as pd
-import requests as _requests
+import httpx
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
 from PIL import Image
 from pyzbar.pyzbar import decode as qr_decode
@@ -287,7 +287,7 @@ async def recover_tickets_from_storage(event_id: str):
         file_path = f"{event_id}/{guest_id}.png"
         image_url = f"{storage_base}/{file_path}"
         try:
-            resp = _requests.get(image_url, timeout=10)
+            resp = httpx.get(image_url, timeout=10)
             if resp.status_code != 200:
                 failed.append({"guest_id": guest_id, "reason": f"Storage {resp.status_code}"})
                 continue
