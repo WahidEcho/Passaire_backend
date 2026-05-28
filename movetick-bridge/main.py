@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from dotenv import load_dotenv
 
-from routers import guests, whatsapp, scanner, events
+from routers import guests, whatsapp, scanner, events, state
 from services.greenapi import set_webhook
 
 load_dotenv()
@@ -32,6 +32,7 @@ app.include_router(events.router)
 app.include_router(guests.router)
 app.include_router(whatsapp.router)
 app.include_router(scanner.router)
+app.include_router(state.router)
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
