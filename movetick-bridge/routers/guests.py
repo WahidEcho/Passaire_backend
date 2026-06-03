@@ -1,9 +1,16 @@
 import io
 import os
+import time
 import asyncio
 import logging
 from datetime import datetime, timezone
 from io import BytesIO
+
+# ── Simple TTL cache (per gunicorn worker process) ────────────────────────────
+_guests_cache: dict[str, tuple[float, list]] = {}   # event_id -> (ts, data)
+_stats_cache:  dict[str, tuple[float, dict]] = {}   # event_id -> (ts, data)
+_GUESTS_TTL = 3.0   # seconds
+_STATS_TTL  = 3.0
 
 import pandas as pd
 import httpx
@@ -206,27 +213,46 @@ async def get_guest_detail(guest_id: str):
 @router.get("/{event_id}")
 async def list_guests(event_id: str, status: str | None = None):
     """List all guests for an event, including zone and qr_url."""
+    now = time.time()
+    # Cache the no-filter call (dashboard polling) — status-filtered calls bypass cache
+    if status is None and event_id in _guests_cache:
+        ts, cached = _guests_cache[event_id]
+        if now - ts < _GUESTS_TTL:
+            return cached
+
     sb = get_supabase()
     query = (
         sb.table("p_guests")
-        .select("*, p_tickets(qr_image_url)")
+        .select("id, name, phone, zone, status, p_tickets(qr_image_url)")
         .eq("event_id", event_id)
     )
     if status:
         query = query.eq("status", status)
     data = query.order("name").execute().data or []
-    return [_attach_qr_url(g) for g in data]
+    result = [_attach_qr_url(g) for g in data]
+
+    if status is None:
+        _guests_cache[event_id] = (now, result)
+    return result
 
 
 @router.get("/{event_id}/stats")
 async def guest_stats(event_id: str):
+    now = time.time()
+    if event_id in _stats_cache:
+        ts, cached = _stats_cache[event_id]
+        if now - ts < _STATS_TTL:
+            return cached
+
     sb     = get_supabase()
     data   = sb.table("p_guests").select("status").eq("event_id", event_id).execute().data
     counts: dict = {}
     for g in data:
         s = g["status"]
         counts[s] = counts.get(s, 0) + 1
-    return {"total": len(data), "breakdown": counts}
+    result = {"total": len(data), "breakdown": counts}
+    _stats_cache[event_id] = (now, result)
+    return result
 
 
 # ── Guest scan history ─────────────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 import logging
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
 
@@ -6,9 +7,17 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from services.supabase_client import get_supabase
+from routers import guests as guests_router   # to bust guests cache on scan
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/scanner", tags=["scanner"])
+
+# ── Simple in-process TTL cache (per worker) ─────────────────────────────────
+_live_cache:   dict[str, tuple[float, dict]] = {}
+_hourly_cache: dict[str, tuple[float, list]] = {}
+_logs_cache:   dict[str, tuple[float, list]] = {}
+_STATS_TTL  = 3.0   # seconds — live stats / hourly
+_LOGS_TTL   = 2.0   # seconds — scan logs
 
 
 class ScanRequest(BaseModel):
@@ -50,7 +59,7 @@ async def scan_ticket(body: ScanRequest):
 
     ticket_res = (
         sb.table("p_tickets")
-        .select("*, p_guests(*), p_events(*)")
+        .select("id, token, event_id, guest_id, p_guests(id, name, phone, zone, status)")
         .eq("token", body.token)
         .maybe_single()
         .execute()
@@ -61,7 +70,9 @@ async def scan_ticket(body: ScanRequest):
 
     ticket = ticket_res.data
     guest  = ticket.get("p_guests") or {}
-    event  = ticket.get("p_events") or {}
+    event  = {"name": None}   # event name removed from join — not needed for gate response
+
+    event_id = ticket.get("event_id", "")
 
     if guest.get("status") == "checked_in":
         sb.table("p_guests").update({"status": "confirmed"}).eq("id", guest["id"]).execute()
@@ -71,6 +82,10 @@ async def scan_ticket(body: ScanRequest):
             "gate_number": body.gate_number,
             "action":      "checked_out",
         }).execute()
+        # Bust caches so next poll reflects the change immediately
+        guests_router._guests_cache.pop(event_id, None)
+        guests_router._stats_cache.pop(event_id, None)
+        _live_cache.pop(event_id, None)
         return {
             "valid":   True,
             "action":  "checked_out",
@@ -80,7 +95,7 @@ async def scan_ticket(body: ScanRequest):
                 "zone":      guest.get("zone"),
                 "ticket_id": ticket["id"][:8].upper(),
             },
-            "event":   event.get("name"),
+            "event":   None,
             "message": f"Checked OUT: {guest['name']}",
         }
 
@@ -91,6 +106,10 @@ async def scan_ticket(body: ScanRequest):
         "gate_number": body.gate_number,
         "action":      "checked_in",
     }).execute()
+    # Bust caches so next poll reflects the change immediately
+    guests_router._guests_cache.pop(event_id, None)
+    guests_router._stats_cache.pop(event_id, None)
+    _live_cache.pop(event_id, None)
 
     return {
         "valid":   True,
@@ -101,7 +120,7 @@ async def scan_ticket(body: ScanRequest):
             "zone":      guest.get("zone"),
             "ticket_id": ticket["id"][:8].upper(),
         },
-        "event":   event.get("name"),
+        "event":   None,
         "message": f"Welcome, {guest['name']}!",
     }
 
@@ -140,6 +159,12 @@ async def preview_ticket(token: str):
 @router.get("/live/{event_id}")
 async def live_stats(event_id: str):
     """Live dashboard stats for an event."""
+    now = time.time()
+    if event_id in _live_cache:
+        ts, cached = _live_cache[event_id]
+        if now - ts < _STATS_TTL:
+            return cached
+
     sb = get_supabase()
 
     guests = sb.table("p_guests").select("status").eq("event_id", event_id).execute()
@@ -161,7 +186,7 @@ async def live_stats(event_id: str):
         )
         total_entries = logs_res.count or 0
 
-    return {
+    result = {
         "total_confirmed":  counts.get("confirmed", 0) + counts.get("checked_in", 0),
         "currently_inside": counts.get("checked_in", 0),
         "total_invited":    counts.get("invited", 0),
@@ -169,6 +194,8 @@ async def live_stats(event_id: str):
         "total_entries":    total_entries,
         "breakdown":        counts,
     }
+    _live_cache[event_id] = (now, result)
+    return result
 
 
 @router.get("/hourly/{event_id}")
@@ -177,6 +204,12 @@ async def hourly_stats(event_id: str):
     Scan counts grouped by hour of day (0–23) for today (UTC).
     Only hours with at least 1 scan are included.
     """
+    now_ts = time.time()
+    if event_id in _hourly_cache:
+        ts, cached = _hourly_cache[event_id]
+        if now_ts - ts < _STATS_TTL:
+            return cached
+
     sb = get_supabase()
 
     ticket_ids = _ticket_ids_for_event(sb, event_id)
@@ -205,12 +238,21 @@ async def hourly_stats(event_id: str):
         except (ValueError, AttributeError):
             pass
 
-    return [{"hour": h, "count": c} for h, c in sorted(hour_counts.items())]
+    result = [{"hour": h, "count": c} for h, c in sorted(hour_counts.items())]
+    _hourly_cache[event_id] = (now_ts, result)
+    return result
 
 
 @router.get("/logs/{event_id}")
 async def scan_logs(event_id: str, limit: int = 50):
     """Return recent scan logs for an event, including guest_id."""
+    now_ts = time.time()
+    cache_key = f"{event_id}:{limit}"
+    if cache_key in _logs_cache:
+        ts, cached = _logs_cache[cache_key]
+        if now_ts - ts < _LOGS_TTL:
+            return cached
+
     sb = get_supabase()
 
     ticket_ids = _ticket_ids_for_event(sb, event_id)
@@ -226,4 +268,6 @@ async def scan_logs(event_id: str, limit: int = 50):
         .execute()
     )
 
-    return [_reshape_log(log) for log in (logs_res.data or [])]
+    result = [_reshape_log(log) for log in (logs_res.data or [])]
+    _logs_cache[cache_key] = (now_ts, result)
+    return result
