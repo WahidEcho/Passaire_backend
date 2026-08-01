@@ -299,7 +299,7 @@ async def recover_tickets_from_storage(event_id: str):
     Safe to call multiple times (upsert on event_id+guest_id).
     """
     sb = get_supabase()
-    event_res = sb.table("p_events").select("id").eq("id", event_id).maybe_single().execute()
+    event_res = sb.table("p_events").select("id").eq("id", event_id).limit(1).execute()
     if not event_res.data:
         raise HTTPException(404, "Event not found")
     guests_res = sb.table("p_guests").select("id, name").eq("event_id", event_id).execute()

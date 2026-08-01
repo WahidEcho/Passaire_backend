@@ -61,14 +61,14 @@ async def scan_ticket(body: ScanRequest):
         sb.table("p_tickets")
         .select("id, token, event_id, guest_id, p_guests(id, name, phone, zone, status)")
         .eq("token", body.token)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
 
     if not ticket_res.data:
         raise HTTPException(404, detail={"valid": False, "reason": "Ticket not found"})
 
-    ticket = ticket_res.data
+    ticket = ticket_res.data[0]
     guest  = ticket.get("p_guests") or {}
     event  = {"name": None}   # event name removed from join — not needed for gate response
 
@@ -137,14 +137,14 @@ async def preview_ticket(token: str):
         sb.table("p_tickets")
         .select("*, p_guests(*)")
         .eq("token", token)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
 
     if not ticket_res.data:
         raise HTTPException(404, detail={"reason": "Ticket not found"})
 
-    guest = ticket_res.data.get("p_guests") or {}
+    guest = ticket_res.data[0].get("p_guests") or {}
     return {
         "guest": {
             "id":     guest.get("id"),
