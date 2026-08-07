@@ -132,11 +132,43 @@ async def admin_panel():
     th { text-align:left; color:#666; padding:6px 10px; border-bottom:1px solid #2a2a4a; font-weight:500; }
     td { padding:8px 10px; border-bottom:1px solid #1a1a2e; }
     tr:hover td { background:#1f1f35; }
+
+    /* ── Active event bar ── */
+    .event-bar {
+      background: #1a1a2e; border: 1px solid #5B3BE8;
+      border-radius: 12px; padding: 18px 24px; margin-bottom: 24px;
+      display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+      position: sticky; top: 12px; z-index: 10;
+      box-shadow: 0 8px 24px rgba(0,0,0,.35);
+    }
+    .event-bar label { margin: 0; white-space: nowrap; }
+    .event-bar select { min-width: 260px; width: auto; }
+    #active-event-banner {
+      font-size: 13px; color: #a0a0ff; flex: 1; min-width: 200px;
+    }
+    #active-event-banner.empty { color: #666; font-style: italic; }
+
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    button.small { padding: 7px 14px; font-size: 13px; margin-top: 0; }
+
+    .card h2 .count {
+      font-size: 12px; color: #666; font-weight: 500; margin-left: 6px;
+    }
   </style>
 </head>
 <body>
   <h1>🎟️ Passaire Admin</h1>
   <p class="sub">Event management & WhatsApp ticketing dashboard</p>
+
+  <!-- ── Active Event Selector (drives every Event ID field below) ── -->
+  <div class="event-bar">
+    <label style="margin:0">Active Event</label>
+    <select id="active-event-select" onchange="onEventChange(true)">
+      <option value="">— Loading events… —</option>
+    </select>
+    <button class="small" onclick="loadEventsList()" title="Refresh event list">⟳</button>
+    <div id="active-event-banner" class="empty">No event selected — pick one to auto-fill every panel below.</div>
+  </div>
 
   <div class="grid">
 
@@ -145,13 +177,13 @@ async def admin_panel():
       <h2>➕ Create Event</h2>
       <label>Event Name</label>
       <input id="ev-name" placeholder="Move Beyond Night">
-      <label>Date (YYYY-MM-DD)</label>
+      <label>Date</label>
       <input id="ev-date" type="date">
       <label>Venue</label>
       <input id="ev-venue" placeholder="Cairo Jazz Club">
       <label>Gate Count</label>
       <input id="ev-gates" type="number" value="1" min="1">
-      <button onclick="createEvent()">Create Event</button>
+      <button onclick="withLoading(this, createEvent)">Create Event</button>
       <div class="result" id="ev-result"></div>
     </div>
 
@@ -159,7 +191,7 @@ async def admin_panel():
     <div class="card">
       <h2>📋 Upload Guest List</h2>
       <label>Event ID</label>
-      <input id="ul-event-id" placeholder="Paste event UUID">
+      <input id="ul-event-id" class="event-id-field" placeholder="Select an active event above, or paste a UUID">
       <label>CSV / Excel — columns: name, phone, zone (zone optional)</label>
       <input id="ul-file" type="file" accept=".csv,.xlsx,.xls">
 
@@ -178,7 +210,7 @@ async def admin_panel():
         Guests receive invitation → reply 1 to get QR ticket
       </p>
 
-      <button onclick="uploadGuests()">Upload &amp; Send</button>
+      <button onclick="withLoading(this, uploadGuests)">Upload &amp; Send</button>
       <div class="result" id="ul-result"></div>
     </div>
 
@@ -186,8 +218,8 @@ async def admin_panel():
     <div class="card">
       <h2>📨 Send WhatsApp Invitations</h2>
       <label>Event ID</label>
-      <input id="inv-event-id" placeholder="Paste event UUID">
-      <button onclick="sendInvitations()">Send to All Invited Guests</button>
+      <input id="inv-event-id" class="event-id-field" placeholder="Select an active event above, or paste a UUID">
+      <button onclick="withLoading(this, sendInvitations)">Send to All Invited Guests</button>
       <div class="result" id="inv-result"></div>
     </div>
 
@@ -195,10 +227,10 @@ async def admin_panel():
     <div class="card">
       <h2>🔔 Send Bulk Reminder / Agenda</h2>
       <label>Event ID</label>
-      <input id="rem-event-id" placeholder="Paste event UUID">
+      <input id="rem-event-id" class="event-id-field" placeholder="Select an active event above, or paste a UUID">
       <label>Message (use {name} for personalisation)</label>
       <textarea id="rem-msg" rows="4" placeholder="Hi {name}! Reminder: event starts at 8pm…"></textarea>
-      <button onclick="sendReminder()">Send to All Confirmed Guests</button>
+      <button onclick="withLoading(this, sendReminder)">Send to All Confirmed Guests</button>
       <div class="result" id="rem-result"></div>
     </div>
 
@@ -206,18 +238,31 @@ async def admin_panel():
     <div class="card">
       <h2>📊 Live Stats</h2>
       <label>Event ID</label>
-      <input id="stat-event-id" placeholder="Paste event UUID">
-      <button onclick="fetchStats()">Refresh Stats</button>
+      <input id="stat-event-id" class="event-id-field" placeholder="Select an active event above, or paste a UUID">
+      <button onclick="withLoading(this, fetchStats)">Refresh Stats</button>
       <div class="result" id="stat-result"></div>
+    </div>
+
+    <!-- ── Send Test Email ── -->
+    <div class="card">
+      <h2>✉️ Send Test Email</h2>
+      <p style="font-size:13px;color:#888;margin-bottom:4px;">
+        Verify the Resend integration (movetick@mbeg.org) is working.
+      </p>
+      <label>To</label>
+      <input id="email-test-to" placeholder="you@example.com">
+      <button onclick="withLoading(this, sendTestEmail)">Send Test Email</button>
+      <div class="result" id="email-test-result"></div>
     </div>
 
     <!-- ── Setup Webhook ── -->
     <div class="card">
-      <h2>🔗 Setup WhatsApp Webhook</h2>
+      <h2>🔗 Setup Green API Webhook</h2>
       <p style="font-size:13px;color:#888;margin-bottom:4px;">
-        Run once after deployment to connect Green API to this backend.
+        Run once after deployment to connect Green API (legacy WhatsApp channel) to this backend.
+        The WhatsApp Cloud API webhook is configured separately in the Meta App Dashboard.
       </p>
-      <button onclick="setupWebhook()">Register Webhook</button>
+      <button onclick="withLoading(this, setupWebhook)">Register Webhook</button>
       <div class="result" id="wh-result"></div>
     </div>
 
@@ -225,17 +270,21 @@ async def admin_panel():
 
   <!-- ── Guest List Table ── -->
   <div class="card">
-    <h2>👥 Guest List</h2>
+    <h2>👥 Guest List<span class="count" id="gl-count"></span></h2>
     <label>Event ID</label>
     <div style="display:flex;gap:10px;align-items:flex-end;">
-      <input id="gl-event-id" placeholder="Paste event UUID" style="flex:1">
-      <button onclick="loadGuests()" style="margin-top:0">Load Guests</button>
+      <input id="gl-event-id" class="event-id-field" placeholder="Select an active event above, or paste a UUID" style="flex:1">
+      <button class="small" onclick="withLoading(this, loadGuests)" style="margin-top:0">Load Guests</button>
     </div>
+    <input id="gl-search" placeholder="🔍 Search by name or phone…" style="margin-top:12px" oninput="filterGuests()">
     <div id="gl-table"></div>
   </div>
 
 <script>
 const api = "";
+let EVENTS = [];
+let currentEventId = localStorage.getItem("activeEventId") || "";
+let _guestData = [];
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 function show(id, data, isError = false) {
@@ -249,6 +298,56 @@ async function call(url, opts = {}) {
   const r = await fetch(api + url, opts);
   const d = await r.json().catch(() => ({ error: "non-JSON response" }));
   return { ok: r.ok, data: d };
+}
+
+async function withLoading(btn, fn) {
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "⏳ Working…";
+  try {
+    await fn();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+}
+
+// ── active event selector ───────────────────────────────────────────────────
+async function loadEventsList() {
+  const { ok, data } = await call("/events/");
+  const sel = document.getElementById("active-event-select");
+  if (!ok || !Array.isArray(data)) {
+    sel.innerHTML = '<option value="">— Failed to load events —</option>';
+    return;
+  }
+  EVENTS = data;
+  sel.innerHTML = '<option value="">— Select an event —</option>' +
+    data.map(e => `<option value="${e.id}">${e.name} — ${e.date}</option>`).join("");
+  if (currentEventId && data.some(e => e.id === currentEventId)) {
+    sel.value = currentEventId;
+    onEventChange(false);
+  }
+}
+
+function onEventChange(userInitiated) {
+  const sel = document.getElementById("active-event-select");
+  currentEventId = sel.value;
+  localStorage.setItem("activeEventId", currentEventId);
+  document.querySelectorAll(".event-id-field").forEach(el => el.value = currentEventId);
+
+  const banner = document.getElementById("active-event-banner");
+  const ev = EVENTS.find(e => e.id === currentEventId);
+  if (ev) {
+    banner.className = "";
+    banner.innerHTML = `📍 <strong>${ev.name}</strong> — ${ev.date}` +
+      (ev.venue ? ` @ ${ev.venue}` : "") +
+      ` <span style="color:#666">(${ev.gate_count || 1} gate${(ev.gate_count || 1) > 1 ? "s" : ""})</span>`;
+    fetchStats();
+    loadGuests();
+  } else {
+    banner.className = "empty";
+    banner.textContent = "No event selected — pick one to auto-fill every panel below.";
+  }
 }
 
 // ── event ─────────────────────────────────────────────────────────────────────
@@ -266,6 +365,13 @@ async function createEvent() {
     body: JSON.stringify(body),
   });
   show("ev-result", data, !ok);
+  if (ok) {
+    await loadEventsList();
+    if (data.id) {
+      document.getElementById("active-event-select").value = data.id;
+      onEventChange(true);
+    }
+  }
 }
 
 // ── send mode toggle ──────────────────────────────────────────────────────────
@@ -284,30 +390,24 @@ async function uploadGuests() {
   const eventId = document.getElementById("ul-event-id").value.trim();
   const file = document.getElementById("ul-file").files[0];
   if (!file || !eventId) return show("ul-result", "Fill in event ID and choose a file", true);
+  if (!confirm(`Upload "${file.name}" and send ${_sendMode === "direct" ? "QR tickets" : "RSVP invitations"} to every guest in it?`)) return;
   const fd = new FormData();
   fd.append("event_id", eventId);
   fd.append("send_mode", _sendMode);
   fd.append("file", file);
   const { ok, data } = await call("/guests/upload", { method: "POST", body: fd });
   show("ul-result", data, !ok);
+  if (ok) loadGuests();
 }
 
-async function loadGuests() {
-  const eventId = document.getElementById("gl-event-id").value.trim();
-  if (!eventId) return;
-  const { ok, data } = await call(`/guests/${eventId}`);
-  if (!ok || !Array.isArray(data)) {
+function renderGuestTable(rows) {
+  if (!rows.length) {
     document.getElementById("gl-table").innerHTML =
-      '<p style="color:#f87171;margin-top:12px">Error loading guests</p>';
-    return;
-  }
-  if (!data.length) {
-    document.getElementById("gl-table").innerHTML =
-      '<p style="color:#888;margin-top:12px">No guests found for this event.</p>';
+      '<p style="color:#888;margin-top:12px">No matching guests.</p>';
     return;
   }
   const statusBadge = (s) => `<span class="badge b-${s}">${s}</span>`;
-  const rows = data.map((g, i) => `
+  const html = rows.map((g, i) => `
     <tr>
       <td style="color:#555">${i + 1}</td>
       <td>${g.name}</td>
@@ -317,14 +417,45 @@ async function loadGuests() {
   document.getElementById("gl-table").innerHTML = `
     <table>
       <thead><tr><th>#</th><th>Name</th><th>Phone</th><th>Status</th></tr></thead>
-      <tbody>${rows}</tbody>
+      <tbody>${html}</tbody>
     </table>`;
+}
+
+function filterGuests() {
+  const q = document.getElementById("gl-search").value.trim().toLowerCase();
+  if (!q) return renderGuestTable(_guestData);
+  renderGuestTable(_guestData.filter(g =>
+    (g.name || "").toLowerCase().includes(q) || (g.phone || "").toLowerCase().includes(q)
+  ));
+}
+
+async function loadGuests() {
+  const eventId = document.getElementById("gl-event-id").value.trim();
+  const countEl = document.getElementById("gl-count");
+  if (!eventId) {
+    document.getElementById("gl-table").innerHTML = "";
+    countEl.textContent = "";
+    return;
+  }
+  const { ok, data } = await call(`/guests/${eventId}`);
+  if (!ok || !Array.isArray(data)) {
+    document.getElementById("gl-table").innerHTML =
+      '<p style="color:#f87171;margin-top:12px">Error loading guests</p>';
+    countEl.textContent = "";
+    return;
+  }
+  _guestData = data;
+  countEl.textContent = `(${data.length})`;
+  document.getElementById("gl-search").value = "";
+  renderGuestTable(_guestData);
 }
 
 // ── invitations ───────────────────────────────────────────────────────────────
 async function sendInvitations() {
   const eventId = document.getElementById("inv-event-id").value.trim();
   if (!eventId) return show("inv-result", "Enter event ID", true);
+  const ev = EVENTS.find(e => e.id === eventId);
+  if (!confirm(`Send WhatsApp invitations to every invited guest of "${ev ? ev.name : eventId}"? This messages real people and can't be undone.`)) return;
   const { ok, data } = await call("/whatsapp/send-invitations", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -338,6 +469,8 @@ async function sendReminder() {
   const eventId = document.getElementById("rem-event-id").value.trim();
   const message = document.getElementById("rem-msg").value.trim();
   if (!eventId || !message) return show("rem-result", "Fill in event ID and message", true);
+  const ev = EVENTS.find(e => e.id === eventId);
+  if (!confirm(`Send this reminder to every CONFIRMED guest of "${ev ? ev.name : eventId}"? This messages real people and can't be undone.`)) return;
   const { ok, data } = await call("/whatsapp/send-reminder", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -354,11 +487,26 @@ async function fetchStats() {
   show("stat-result", data, !ok);
 }
 
+// ── test email ───────────────────────────────────────────────────────────────
+async function sendTestEmail() {
+  const to = document.getElementById("email-test-to").value.trim();
+  if (!to) return show("email-test-result", "Enter a recipient email", true);
+  const { ok, data } = await call("/email/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ to }),
+  });
+  show("email-test-result", data, !ok);
+}
+
 // ── webhook ───────────────────────────────────────────────────────────────────
 async function setupWebhook() {
   const { ok, data } = await call("/setup-webhook", { method: "POST" });
   show("wh-result", data, !ok);
 }
+
+// ── init ─────────────────────────────────────────────────────────────────────
+loadEventsList();
 </script>
 </body>
 </html>
