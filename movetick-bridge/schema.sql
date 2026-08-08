@@ -82,6 +82,16 @@ create index idx_message_log_guest_id            on p_message_log(guest_id);
 create index idx_message_log_provider_message_id on p_message_log(provider_message_id);
 
 -- ============================================================
+-- ORPHANED TABLES (do not use)
+-- `events` and `guests` (no p_ prefix) are leftovers from an
+-- earlier draft of this schema, before the p_ prefix convention.
+-- Confirmed empty (0 rows) and unreferenced by this backend as of
+-- the 2026-08 admin redesign. Kept (not dropped) and RLS-locked
+-- below in case something outside this codebase still expects them.
+-- The real, active tables are the p_-prefixed ones above.
+-- ============================================================
+
+-- ============================================================
 -- ROW LEVEL SECURITY
 -- The backend uses the service_role key exclusively, which always
 -- bypasses RLS regardless of policies. RLS is enabled here with
@@ -89,6 +99,7 @@ create index idx_message_log_provider_message_id on p_message_log(provider_messa
 -- for anon/authenticated (they get no access at all) while leaving
 -- the backend completely unaffected. Insurance against any future
 -- accidental client-side Supabase exposure, not a functional need.
+-- Includes the two orphaned tables above for the same reason.
 -- ============================================================
 alter table p_events      enable row level security;
 alter table p_guests      enable row level security;
@@ -96,6 +107,8 @@ alter table p_tickets     enable row level security;
 alter table p_scan_logs   enable row level security;
 alter table p_wa_messages enable row level security;
 alter table p_message_log enable row level security;
+alter table events        enable row level security;
+alter table guests        enable row level security;
 
 -- ============================================================
 -- MIGRATIONS  (run these if upgrading an existing database)
