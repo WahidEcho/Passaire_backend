@@ -21,6 +21,7 @@ create table p_guests (
   event_id   uuid references p_events(id) on delete cascade,
   name       text not null,
   phone      text not null,           -- no +, e.g. 201039048775
+  email      text,                    -- optional, required for bulk email sends
   zone       text,                    -- blue | red | green  (optional)
   status     text default 'invited',  -- invited | confirmed | declined | checked_in
   created_at timestamptz default now(),
@@ -49,7 +50,7 @@ create table p_scan_logs (
   scanned_at  timestamptz default now()
 );
 
--- 5. WHATSAPP MESSAGE LOG
+-- 5. WHATSAPP MESSAGE LOG (legacy — Green API only, superseded by p_message_log below)
 create table p_wa_messages (
   id           uuid primary key default gen_random_uuid(),
   phone        text not null,
@@ -57,6 +58,28 @@ create table p_wa_messages (
   status       text default 'sent',
   sent_at      timestamptz default now()
 );
+
+-- 6. MESSAGE DELIVERY LOG (WhatsApp Cloud API + email, tracked per guest per event)
+create table p_message_log (
+  id                   uuid primary key default gen_random_uuid(),
+  event_id             uuid references p_events(id) on delete cascade,
+  guest_id             uuid references p_guests(id) on delete cascade,
+  channel              text not null,                    -- whatsapp | email
+  message_type         text not null,                    -- invitation | reminder | ticket | bulk | custom
+  recipient            text not null,                     -- phone or email at time of send
+  provider_message_id  text,                               -- WA Cloud wamid.xxx OR Resend email id
+  status               text not null default 'queued',    -- sent|delivered|read|failed|bounced|complained
+  error_detail         text,
+  sent_at              timestamptz,
+  delivered_at         timestamptz,
+  read_at              timestamptz,
+  failed_at            timestamptz,
+  created_at           timestamptz default now(),
+  updated_at           timestamptz default now()
+);
+create index idx_message_log_event_id           on p_message_log(event_id);
+create index idx_message_log_guest_id            on p_message_log(guest_id);
+create index idx_message_log_provider_message_id on p_message_log(provider_message_id);
 
 -- ============================================================
 -- DISABLE ROW LEVEL SECURITY
@@ -68,6 +91,7 @@ alter table p_guests      disable row level security;
 alter table p_tickets     disable row level security;
 alter table p_scan_logs   disable row level security;
 alter table p_wa_messages disable row level security;
+alter table p_message_log disable row level security;
 
 -- ============================================================
 -- MIGRATIONS  (run these if upgrading an existing database)
@@ -76,6 +100,31 @@ alter table p_wa_messages disable row level security;
 -- alter table p_events      add column if not exists manager_passcode text;
 -- alter table p_events      add column if not exists guard_passcode   text;
 -- alter table p_scan_logs   add column if not exists guest_id         uuid references p_guests(id) on delete cascade;
+
+-- ── Admin redesign: email field + delivery tracking (run this block now) ──
+alter table p_guests add column if not exists email text;
+
+create table if not exists p_message_log (
+  id                   uuid primary key default gen_random_uuid(),
+  event_id             uuid references p_events(id) on delete cascade,
+  guest_id             uuid references p_guests(id) on delete cascade,
+  channel              text not null,
+  message_type         text not null,
+  recipient            text not null,
+  provider_message_id  text,
+  status               text not null default 'queued',
+  error_detail         text,
+  sent_at              timestamptz,
+  delivered_at         timestamptz,
+  read_at              timestamptz,
+  failed_at            timestamptz,
+  created_at           timestamptz default now(),
+  updated_at           timestamptz default now()
+);
+create index if not exists idx_message_log_event_id           on p_message_log(event_id);
+create index if not exists idx_message_log_guest_id            on p_message_log(guest_id);
+create index if not exists idx_message_log_provider_message_id on p_message_log(provider_message_id);
+alter table p_message_log disable row level security;
 
 -- ============================================================
 -- STORAGE BUCKET  (do this in the Supabase Dashboard)

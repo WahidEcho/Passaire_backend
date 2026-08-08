@@ -1,3 +1,8 @@
+# NOTE: legacy Green API channel — superseded by routers/whatsapp_cloud.py
+# (Meta's official Cloud API) for admin-triggered sends, since Green API
+# has no delivery-status webhook and can't be tracked in p_message_log.
+# Kept working, not deleted, for manual/backup use.
+
 import asyncio
 import logging
 from datetime import datetime, timezone

@@ -5,6 +5,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from io import BytesIO
+from typing import Optional
 
 # ── Simple TTL cache (per gunicorn worker process) ────────────────────────────
 _guests_cache: dict[str, tuple[float, list]] = {}   # event_id -> (ts, data)
@@ -15,6 +16,9 @@ _STATS_TTL  = 3.0
 import pandas as pd
 import httpx
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from openpyxl import Workbook
 import zxingcpp
 from PIL import Image
 
@@ -132,20 +136,26 @@ async def upload_guests(
     name_col  = next((c for c in df.columns if "name"   in c), None)
     phone_col = next((c for c in df.columns if "phone"  in c or "mobile" in c or "number" in c), None)
     zone_col  = next((c for c in df.columns if "zone"   in c), None)
+    email_col = next((c for c in df.columns if "email"  in c), None)
 
     if not name_col or not phone_col:
-        raise HTTPException(400, "File must have columns: name, phone (zone optional)")
+        raise HTTPException(400, "File must have columns: name, phone (email, zone optional)")
 
-    cols = [name_col, phone_col] + ([zone_col] if zone_col else [])
+    cols = [name_col, phone_col] + ([zone_col] if zone_col else []) + ([email_col] if email_col else [])
     df   = df[cols].dropna(subset=[name_col, phone_col])
     df   = df.rename(columns={name_col: "name", phone_col: "phone",
-                               **({zone_col: "zone"} if zone_col else {})})
+                               **({zone_col: "zone"} if zone_col else {}),
+                               **({email_col: "email"} if email_col else {})})
 
     df["phone"]    = df["phone"].apply(_normalise_phone)
     df["event_id"] = event_id
     df["status"]   = "invited"
     if "zone" not in df.columns:
         df["zone"] = None
+    if "email" not in df.columns:
+        df["email"] = None
+    else:
+        df["email"] = df["email"].astype(str).str.strip().str.lower().replace({"nan": None, "none": None})
 
     records = df.to_dict(orient="records")
     if not records:
@@ -155,10 +165,10 @@ async def upload_guests(
     sb.table("p_guests").upsert(records, on_conflict="event_id,phone").execute()
 
     if send_mode == "direct":
-        event_res = sb.table("p_events").select("*").eq("id", event_id).single().execute()
+        event_res = sb.table("p_events").select("*").eq("id", event_id).limit(1).execute()
         if not event_res.data:
             raise HTTPException(404, "Event not found")
-        event = event_res.data
+        event = event_res.data[0]
 
         phones = [r["phone"] for r in records]
         guests_res = (
@@ -192,12 +202,12 @@ async def get_guest_detail(guest_id: str):
         sb.table("p_guests")
         .select("*, p_tickets(qr_image_url)")
         .eq("id", guest_id)
-        .single()
+        .limit(1)
         .execute()
     )
     if not res.data:
         raise HTTPException(404, "Guest not found")
-    guest = res.data
+    guest = res.data[0]
     tickets = guest.pop("p_tickets", None) or []
     if isinstance(tickets, list) and tickets:
         guest["qr_url"] = tickets[0].get("qr_image_url")
@@ -206,6 +216,56 @@ async def get_guest_detail(guest_id: str):
     else:
         guest["qr_url"] = None
     return guest
+
+
+class UpdateGuestRequest(BaseModel):
+    name:  Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    zone:  Optional[str] = None
+
+
+@router.patch("/detail/{guest_id}")
+async def update_guest(guest_id: str, body: UpdateGuestRequest):
+    """Edit a single guest's name/phone/email/zone."""
+    sb = get_supabase()
+    updates = body.model_dump(exclude_unset=True, exclude_none=True)
+    if "phone" in updates:
+        updates["phone"] = _normalise_phone(updates["phone"])
+    if "email" in updates:
+        updates["email"] = updates["email"].strip().lower() or None
+    if not updates:
+        raise HTTPException(400, "No fields provided to update")
+    try:
+        result = sb.table("p_guests").update(updates).eq("id", guest_id).execute()
+    except Exception as e:
+        if "duplicate" in str(e).lower() or "unique" in str(e).lower():
+            raise HTTPException(409, "Another guest in this event already has that phone number")
+        raise
+    if not result.data:
+        raise HTTPException(404, "Guest not found")
+    return result.data[0]
+
+
+# ── Downloadable guest-list template (must precede /{event_id} catch-all) ─────
+
+@router.get("/template")
+async def download_guest_template():
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Guests"
+    ws.append(["name", "phone", "email", "zone"])
+    ws.append(["Jane Doe", "201039048775", "jane@example.com", "vip"])
+    for col, w in zip("ABCD", (24, 18, 28, 14)):
+        ws.column_dimensions[col].width = w
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="guest_list_template.xlsx"'},
+    )
 
 
 # ── List guests for an event ───────────────────────────────────────────────────
@@ -223,13 +283,27 @@ async def list_guests(event_id: str, status: str | None = None):
     sb = get_supabase()
     query = (
         sb.table("p_guests")
-        .select("id, name, phone, zone, status, p_tickets(qr_image_url)")
+        .select("id, name, phone, email, zone, status, p_tickets(qr_image_url)")
         .eq("event_id", event_id)
     )
     if status:
         query = query.eq("status", status)
     data = query.order("name").execute().data or []
     result = [_attach_qr_url(g) for g in data]
+
+    log_rows = (
+        sb.table("p_message_log")
+        .select("guest_id, channel, status, created_at")
+        .eq("event_id", event_id)
+        .order("created_at", desc=True)
+        .execute()
+        .data or []
+    )
+    latest_delivery: dict = {}
+    for row in log_rows:
+        latest_delivery.setdefault(row["guest_id"], {"channel": row["channel"], "status": row["status"]})
+    for g in result:
+        g["delivery"] = latest_delivery.get(g["id"])
 
     if status is None:
         _guests_cache[event_id] = (now, result)
@@ -350,7 +424,7 @@ async def manual_checkin(guest_id: str):
     """Manually set a guest's status to checked_in and record a scan log."""
     sb = get_supabase()
 
-    guest_res = sb.table("p_guests").select("id").eq("id", guest_id).single().execute()
+    guest_res = sb.table("p_guests").select("id").eq("id", guest_id).limit(1).execute()
     if not guest_res.data:
         raise HTTPException(404, "Guest not found")
 
@@ -381,7 +455,7 @@ async def manual_checkout(guest_id: str):
     """Manually revert a guest's status to confirmed and record a scan log."""
     sb = get_supabase()
 
-    guest_res = sb.table("p_guests").select("id").eq("id", guest_id).single().execute()
+    guest_res = sb.table("p_guests").select("id").eq("id", guest_id).limit(1).execute()
     if not guest_res.data:
         raise HTTPException(404, "Guest not found")
 

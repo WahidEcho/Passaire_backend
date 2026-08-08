@@ -1,3 +1,7 @@
+# NOTE: legacy Green API channel — superseded by services/whatsapp_cloud.py
+# (Meta's official Cloud API) for admin-triggered sends. Kept working,
+# not deleted, for manual/backup use.
+
 import os
 import httpx
 from dotenv import load_dotenv
