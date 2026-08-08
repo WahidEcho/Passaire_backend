@@ -82,16 +82,20 @@ create index idx_message_log_guest_id            on p_message_log(guest_id);
 create index idx_message_log_provider_message_id on p_message_log(provider_message_id);
 
 -- ============================================================
--- DISABLE ROW LEVEL SECURITY
--- (backend uses service_role key which bypasses RLS anyway,
---  but disabling keeps things explicit)
+-- ROW LEVEL SECURITY
+-- The backend uses the service_role key exclusively, which always
+-- bypasses RLS regardless of policies. RLS is enabled here with
+-- ZERO policies on purpose — this is the strictest possible lockdown
+-- for anon/authenticated (they get no access at all) while leaving
+-- the backend completely unaffected. Insurance against any future
+-- accidental client-side Supabase exposure, not a functional need.
 -- ============================================================
-alter table p_events      disable row level security;
-alter table p_guests      disable row level security;
-alter table p_tickets     disable row level security;
-alter table p_scan_logs   disable row level security;
-alter table p_wa_messages disable row level security;
-alter table p_message_log disable row level security;
+alter table p_events      enable row level security;
+alter table p_guests      enable row level security;
+alter table p_tickets     enable row level security;
+alter table p_scan_logs   enable row level security;
+alter table p_wa_messages enable row level security;
+alter table p_message_log enable row level security;
 
 -- ============================================================
 -- MIGRATIONS  (run these if upgrading an existing database)
